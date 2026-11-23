@@ -1,4 +1,4 @@
-# Builds pipeline-smoke and pushes it to ghcr.io/nhz-io/gpu-train-images/pipeline-smoke:rev-<12 hex of its Dockerfile>.
+# Builds pipeline-smoke and pushes it to ghcr.io/plasmid-cloud/gpu-train-images/pipeline-smoke:rev-<12 hex of its Dockerfile>.
 # The job summary has the digest and sizes.
 name: pipeline-smoke
 on:
