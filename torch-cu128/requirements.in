@@ -1,0 +1,5 @@
+torch==2.11.0+cu128
+transformers==5.24.0
+accelerate==1.16.0
+safetensors==0.8.0
+numpy==2.5.4
