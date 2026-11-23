@@ -1,0 +1,100 @@
+# Builds the images images.toml lists and pushes them to ghcr.io/plasmid-cloud/gpu-train-images/<name>:<tag>: the bases
+# first, then each overlay FROM its base by the digest the registry holds for the base's tag. A tag is the hash of an
+# image's inputs, and an image whose tag the registry already holds is not built again. Only the checkout action is
+# used (pinned); docker itself does the rest. Each job's summary has the digest and sizes.
+name: images
+on:
+  push:
+    branches: [main]
+    paths: [base/**, overlay/**, models/**, images.toml, images.py, .github/workflows/images.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+env:
+  REGISTRY: ghcr.io/${{ github.repository }}
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      bases: ${{ steps.list.outputs.bases }}
+      overlays: ${{ steps.list.outputs.overlays }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - id: list
+        run: python3 images.py | tee -a "$GITHUB_OUTPUT"
+  base:
+    needs: plan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.bases) }}
+    env:
+      REF: ghcr.io/${{ github.repository }}/${{ matrix.image.name }}:${{ matrix.image.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Log in and look for the tag
+        id: look
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker manifest inspect "$REF" > /dev/null 2>&1; then echo "found=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Free disk (torch + CUDA wheels need about 20 GB while building)
+        if: steps.look.outputs.found != 'yes'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - name: Build and push
+        if: steps.look.outputs.found != 'yes'
+        run: |
+          docker build --build-arg CUDA=${{ matrix.image.cuda }} -t "$REF" base
+          docker push "$REF"
+          unpacked=$(docker image inspect --format '{{.Size}}' "$REF")
+          {
+            echo "unpacked: $((unpacked / 1048576)) MiB"
+            echo '```'; docker history --format '{{.Size}}\t{{.CreatedBy}}' "$REF" | cut -c1-140; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Digest
+        run: |
+          digest=$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' | jq -r .digest)
+          packed=$(docker buildx imagetools inspect --raw "$REF" | jq '[.layers[].size] | add')
+          {
+            echo "image: \`${REF%:*}@$digest\`"
+            echo "compressed: $((packed / 1048576)) MiB"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+  overlay:
+    needs: [plan, base]
+    if: needs.plan.outputs.overlays != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.overlays) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Log in, find the base's digest and look for the tag
+        id: look
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          base="$REGISTRY/${{ matrix.image.base }}"
+          digest=$(docker buildx imagetools inspect "$base" --format '{{json .Manifest}}' | jq -r .digest)
+          tag=rev-$(echo "${{ matrix.image.inputs }} $digest" | sha256sum | cut -c1-12)
+          echo "BASE=${base%:*}@$digest" >> "$GITHUB_ENV"
+          echo "REF=$REGISTRY/${{ matrix.image.name }}:$tag" >> "$GITHUB_ENV"
+          if docker manifest inspect "$REGISTRY/${{ matrix.image.name }}:$tag" > /dev/null 2>&1; then echo "found=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Free disk (the base is about 6 GB unpacked)
+        if: steps.look.outputs.found != 'yes'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - name: Build and push
+        if: steps.look.outputs.found != 'yes'
+        run: |
+          docker build -f overlay/Dockerfile --build-arg BASE="$BASE" --build-arg MODEL_REPO=${{ matrix.image.repo }} \
+            --build-arg MODEL_REV=${{ matrix.image.rev }} -t "$REF" "models/${{ matrix.image.model }}"
+          docker push "$REF"
+      - name: Digest
+        run: |
+          digest=$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' | jq -r .digest)
+          packed=$(docker buildx imagetools inspect --raw "$REF" | jq '[.layers[].size] | add')
+          {
+            echo "image: \`${REF%:*}@$digest\`"
+            echo "base: \`$BASE\`"
+            echo "compressed: $((packed / 1048576)) MiB"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

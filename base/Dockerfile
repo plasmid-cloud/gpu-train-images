@@ -1,17 +1,20 @@
-# Base image for training on rented GPUs with Plasmid: the system, torch with its CUDA wheels and the Python packages
-# a trainer on Plasmid's libraries needs. No model; a model is an overlay image built FROM this one. The host brings
+# Base images for training on rented GPUs with Plasmid: the system, torch with its CUDA wheels and the Python packages
+# a trainer on Plasmid's libraries needs. No model; a model is an overlay image built FROM one of these. The host brings
 # the NVIDIA driver and torch's wheels bring the CUDA runtime, so no CUDA base image and no toolkit.
-#   /opt/py   torch 2.15.0+cu132, transformers, accelerate, safetensors, numpy and their dependencies
-#             (requirements.txt, hash-locked, compiled from requirements.in); /opt/py/LOCK is that file's sha256
+#   /opt/py   torch, transformers, accelerate, safetensors, numpy and their dependencies
+#             (<CUDA>/requirements.txt, hash-locked, compiled from requirements.in); /opt/py/LOCK is that file's sha256
 # /opt/py is on sys.path through a .pth file, so `python3 -I` sees it.
+# One file for every CUDA version: CUDA names the folder beside this file that holds the lock, and PyTorch's wheel
+# index. The build context is this folder: docker build --build-arg CUDA=cu132 base
 ARG BASE=ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
 FROM ${BASE} AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt /src/
+ARG CUDA
+COPY ${CUDA}/requirements.txt /src/
 RUN python3 -m pip install --quiet --no-cache-dir --break-system-packages --require-hashes --no-deps \
-      --index-url https://download.pytorch.org/whl/cu132 --extra-index-url https://pypi.org/simple \
+      --index-url https://download.pytorch.org/whl/${CUDA} --extra-index-url https://pypi.org/simple \
       --target /opt/py -r /src/requirements.txt \
  && sha256sum < /src/requirements.txt | cut -d' ' -f1 > /opt/py/LOCK
 

@@ -1,0 +1,12 @@
+# The images built from base/ and overlay/. A base is base/Dockerfile with the lock in base/<cuda>/, published as
+# torch-<cuda>. An overlay is overlay/Dockerfile on a base with the model in models/<model>/, published as
+# torch-<cuda>-<model>. Adding a CUDA version or a model is a folder and an entry here.
+[[base]]
+cuda = "cu128"
+
+[[base]]
+cuda = "cu132"
+
+[[overlay]]
+base = "cu132"
+model = "modernbert-base"
