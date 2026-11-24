@@ -10,3 +10,7 @@ cuda = "cu132"
 [[overlay]]
 base = "cu132"
 model = "modernbert-base"
+
+[[overlay]]
+base = "cu132"
+model = "smollm2-135m-instruct"
